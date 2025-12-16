@@ -13,59 +13,125 @@ class MissionControl {
         return $stmt->fetchAll();
     }
 
+    // ... startMission und launchModule bleiben gleich ...
     public function startMission(int $userId, int $rocketId, int $missionId): array {
         try {
             $this->db->beginTransaction();
-
-            // 1. Rakete prüfen
             $stmt = $this->db->prepare("SELECT * FROM user_fleet WHERE id = :rid AND user_id = :uid FOR UPDATE");
             $stmt->execute([':rid' => $rocketId, ':uid' => $userId]);
             $rocket = $stmt->fetch();
+            if (!$rocket || $rocket['status'] !== 'idle') throw new Exception("Rakete nicht bereit.");
 
-            if (!$rocket) throw new Exception("Rakete nicht gefunden.");
-            if ($rocket['status'] !== 'idle') throw new Exception("Rakete ist nicht bereit.");
-
-            // 2. Mission prüfen
             $stmt = $this->db->prepare("SELECT * FROM mission_types WHERE id = :mid");
             $stmt->execute([':mid' => $missionId]);
             $mission = $stmt->fetch();
 
-            // 3. Kapazität prüfen
             $stmt = $this->db->prepare("SELECT cargo_capacity_leo FROM rocket_types WHERE id = :rtid");
             $stmt->execute([':rtid' => $rocket['rocket_type_id']]);
             $rocketStats = $stmt->fetch();
 
-            if ($rocketStats['cargo_capacity_leo'] < $mission['required_cargo_capacity']) {
-                throw new Exception("Rakete zu schwach! Benötigt: {$mission['required_cargo_capacity']}kg.");
-            }
+            if ($rocketStats['cargo_capacity_leo'] < $mission['required_cargo_capacity']) throw new Exception("Rakete zu schwach!");
 
-            // 4. START: Status UND Mission-ID speichern (Das ist neu!)
-            $updateRocket = $this->db->prepare("
-                UPDATE user_fleet 
-                SET status = 'in_mission', 
-                    current_mission_id = :mid 
-                WHERE id = :rid
-            ");
-            $updateRocket->execute([':mid' => $missionId, ':rid' => $rocketId]);
-
-            // 5. Event erstellen
-            $duration = $mission['duration_seconds'];
-            $insertEvent = $this->db->prepare("
-                INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) 
-                VALUES (:uid, 'MISSION_RETURN', :rid, NOW(), NOW() + INTERVAL :duration SECOND, 0)
-            ");
-            $insertEvent->execute([
-                ':uid' => $userId,
-                ':rid' => $rocketId,
-                ':duration' => $duration
-            ]);
+            $this->db->prepare("UPDATE user_fleet SET status = 'in_mission', current_mission_id = :mid WHERE id = :rid")->execute([':mid' => $missionId, ':rid' => $rocketId]);
+            
+            $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) VALUES (:uid, 'MISSION_RETURN', :rid, NOW(), NOW() + INTERVAL :dur SECOND, 0)")
+                     ->execute([':uid' => $userId, ':rid' => $rocketId, ':dur' => $mission['duration_seconds']]);
 
             $this->db->commit();
-            return ['success' => true, 'message' => "Start erfolgreich! Mission '{$mission['name']}' läuft."];
+            return ['success' => true, 'message' => "Start erfolgreich! Mission läuft."];
+        } catch (Exception $e) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function launchModule(int $userId, int $rocketId, int $moduleId): array {
+        try {
+            $this->db->beginTransaction();
+            $stmt = $this->db->prepare("SELECT * FROM user_fleet WHERE id = :rid AND user_id = :uid FOR UPDATE");
+            $stmt->execute([':rid' => $rocketId, ':uid' => $userId]);
+            $rocket = $stmt->fetch();
+            if (!$rocket || $rocket['status'] !== 'idle') throw new Exception("Rakete nicht bereit.");
+
+            $stmt = $this->db->prepare("SELECT um.*, smt.mass_kg, smt.name FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.id = :mid AND um.user_id = :uid");
+            $stmt->execute([':mid' => $moduleId, ':uid' => $userId]);
+            $module = $stmt->fetch();
+            if (!$module || $module['status'] !== 'stored') throw new Exception("Modul nicht im Lager.");
+
+            $stmt = $this->db->prepare("SELECT cargo_capacity_leo FROM rocket_types WHERE id = :rtid");
+            $stmt->execute([':rtid' => $rocket['rocket_type_id']]);
+            $rocketStats = $stmt->fetch();
+            if ($rocketStats['cargo_capacity_leo'] < $module['mass_kg']) throw new Exception("Rakete zu schwach!");
+
+            $this->db->prepare("UPDATE user_fleet SET status = 'in_mission', current_mission_id = NULL WHERE id = :rid")->execute([':rid' => $rocketId]);
+            $this->db->prepare("UPDATE user_modules SET status = 'launched' WHERE id = :mid")->execute([':mid' => $moduleId]);
+            
+            $stmt = $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) VALUES (:uid, 'MODULE_LAUNCH', :mid, NOW(), NOW() + INTERVAL 14400 SECOND, 0)");
+            $stmt->execute([':uid' => $userId, ':mid' => $moduleId]);
+            
+            $this->db->prepare("UPDATE user_modules SET condition_percent = :rid WHERE id = :mid")->execute([':rid' => $rocketId, ':mid' => $moduleId]);
+
+            $this->db->commit();
+            return ['success' => true, 'message' => "Startsequenz eingeleitet! '{$module['name']}' unterwegs."];
+        } catch (Exception $e) {
+            if ($this->db->inTransaction()) $this->db->rollBack();
+            return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    /**
+     * NEU: Schickt einen Astronauten zur Station
+     */
+    public function launchAstronaut(int $userId, int $rocketId, int $astroId): array {
+        try {
+            $this->db->beginTransaction();
+
+            // 1. Astronaut prüfen
+            $stmt = $this->db->prepare("SELECT * FROM astronauts WHERE id = :aid AND user_id = :uid");
+            $stmt->execute([':aid' => $astroId, ':uid' => $userId]);
+            $astro = $stmt->fetch();
+            if (!$astro || $astro['status'] !== 'ready') throw new Exception("Astronaut nicht bereit.");
+
+            // 2. Station prüfen (Gibt es Platz?)
+            // Wir zählen einfach Slots vs Belegung
+            $stmt = $this->db->prepare("SELECT SUM(smt.crew_capacity) FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.user_id = :uid AND um.status = 'assembled'");
+            $stmt->execute([':uid' => $userId]);
+            $capacity = (int)$stmt->fetchColumn();
+
+            $stmt = $this->db->prepare("SELECT COUNT(*) FROM astronauts WHERE user_id = :uid AND status = 'in_orbit'");
+            $stmt->execute([':uid' => $userId]);
+            $currentCrew = (int)$stmt->fetchColumn();
+
+            if ($currentCrew >= $capacity) throw new Exception("Kein Platz auf der Station! Kapazität: $capacity");
+
+            // 3. Rakete prüfen (Muss 'idle' sein)
+            // Normalerweise bräuchte man eine "Crew Capsule", aber wir nehmen jede Rakete.
+            $stmt = $this->db->prepare("SELECT * FROM user_fleet WHERE id = :rid AND user_id = :uid FOR UPDATE");
+            $stmt->execute([':rid' => $rocketId, ':uid' => $userId]);
+            $rocket = $stmt->fetch();
+            if (!$rocket || $rocket['status'] !== 'idle') throw new Exception("Rakete nicht bereit.");
+
+            // 4. START
+            $this->db->prepare("UPDATE user_fleet SET status = 'in_mission', current_mission_id = NULL WHERE id = :rid")->execute([':rid' => $rocketId]);
+            $this->db->prepare("UPDATE astronauts SET status = 'in_orbit' WHERE id = :aid")->execute([':aid' => $astroId]);
+
+            // 5. Event erstellen (Typ: CREW_LAUNCH)
+            // Dauer: 2 Stunden Flug zur Station
+            $duration = 7200; 
+            $stmt = $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) 
+                                      VALUES (:uid, 'CREW_LAUNCH', :aid, NOW(), NOW() + INTERVAL :dur SECOND, 0)");
+            $stmt->execute([':uid' => $userId, ':aid' => $astroId, ':dur' => $duration]);
+            
+            // Hack: Wir merken uns die Rakete in der Event Queue? Nein, geht nicht gut.
+            // Besser: Wir nutzen ein Hilfsfeld beim Astronauten, ähnlich wie beim Modul.
+            $this->db->prepare("UPDATE astronauts SET assigned_module_id = :rid WHERE id = :aid")->execute([':rid' => $rocketId, ':aid' => $astroId]);
+
+            $this->db->commit();
+            return ['success' => true, 'message' => "{$astro['name']} ist auf dem Weg zur Station!"];
 
         } catch (Exception $e) {
             if ($this->db->inTransaction()) $this->db->rollBack();
-            return ['success' => false, 'message' => "Start abgebrochen: " . $e->getMessage()];
+            return ['success' => false, 'message' => $e->getMessage()];
         }
     }
 }

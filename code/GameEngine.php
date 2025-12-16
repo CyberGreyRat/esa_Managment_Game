@@ -10,7 +10,6 @@ class GameEngine {
 
     public function processQueue(int $userId): array {
         $messages = [];
-        
         $passiveMsg = $this->calculatePassiveScience($userId);
         if ($passiveMsg) $messages[] = $passiveMsg;
 
@@ -29,7 +28,6 @@ class GameEngine {
         return $messages;
     }
 
-    // ... (calculatePassiveScience und updateLastActive bleiben gleich wie vorher, Platz sparen) ...
     private function calculatePassiveScience(int $userId): ?string {
         $stmt = $this->db->prepare("SELECT last_active FROM users WHERE id = :uid");
         $stmt->execute([':uid' => $userId]);
@@ -38,26 +36,39 @@ class GameEngine {
         $diff = (new DateTime())->getTimestamp() - (new DateTime($lastActiveStr))->getTimestamp();
         if ($diff < 10) return null;
 
+        // Station Bonus + Crew
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM user_modules WHERE user_id = :uid AND status = 'assembled'");
+        $stmt->execute([':uid' => $userId]);
+        $stationModulesCount = (int)$stmt->fetchColumn();
+        
+        $stmt = $this->db->prepare("SELECT COUNT(*) FROM astronauts WHERE user_id = :uid AND status = 'in_orbit'");
+        $stmt->execute([':uid' => $userId]);
+        $astroCount = (int)$stmt->fetchColumn();
+
+        $stationBonus = ($stationModulesCount * 50) + ($astroCount * 200);
+
         $stmt = $this->db->prepare("SELECT current_level FROM user_buildings WHERE user_id = :uid AND building_type_id = 2");
         $stmt->execute([':uid' => $userId]);
         $labLevel = (int)$stmt->fetchColumn(); 
         $stmt = $this->db->prepare("SELECT SUM(skill_value) FROM specialists WHERE user_id = :uid AND type = 'Scientist'");
         $stmt->execute([':uid' => $userId]);
         $scientistBonus = (int)$stmt->fetchColumn();
-        $rate = ($labLevel * 10) + $scientistBonus;
+
+        $rate = ($labLevel * 10) + $scientistBonus + $stationBonus;
+        
         if ($rate <= 0) return null;
+
         $earned = floor(($diff / 3600) * $rate);
         if ($earned > 0) {
             $this->db->query("UPDATE user_resources SET science_points = science_points + $earned WHERE user_id = $userId");
-            return "🧪 Passive Forschung: +$earned SP";
+            return "🧪 Passive Forschung (Station & Crew): +$earned SP";
         }
         return null;
     }
+    
     private function updateLastActive($uid) { $this->db->query("UPDATE users SET last_active = NOW() WHERE id = $uid"); }
 
-
     public function getActiveEvents(int $userId): array {
-        // Wir joinen countries, falls es irgendeine Art von Negotiation ist
         $sql = "SELECT 
                     eq.*,
                     TIMESTAMPDIFF(SECOND, NOW(), eq.end_time) as seconds_remaining,
@@ -65,14 +76,19 @@ class GameEngine {
                     mt.name as mission_name,
                     mt.reward_money,
                     bt.name as building_name,
-                    c.name as country_name
+                    c.name as country_name,
+                    smt.name as module_name,
+                    a.name as astronaut_name
                 FROM event_queue eq
                 LEFT JOIN user_fleet uf ON eq.reference_id = uf.id AND eq.event_type = 'MISSION_RETURN'
                 LEFT JOIN mission_types mt ON uf.current_mission_id = mt.id
                 LEFT JOIN user_buildings ub ON eq.reference_id = ub.id AND eq.event_type = 'BUILDING_UPGRADE'
                 LEFT JOIN building_types bt ON ub.building_type_id = bt.id
-                -- Join für ALLE Verhandlungsarten (starten mit NEGOTIATION_)
                 LEFT JOIN countries c ON eq.reference_id = c.id AND eq.event_type LIKE 'NEGOTIATION_%'
+                LEFT JOIN user_modules um ON eq.reference_id = um.id AND (eq.event_type = 'MODULE_CONSTRUCTION' OR eq.event_type = 'MODULE_LAUNCH')
+                LEFT JOIN station_module_types smt ON um.module_type_id = smt.id
+                LEFT JOIN astronauts a ON eq.reference_id = a.id AND (eq.event_type = 'ASTRO_TRAINING' OR eq.event_type = 'CREW_LAUNCH')
+                
                 WHERE eq.user_id = :uid AND eq.is_processed = 0 AND eq.end_time > NOW()
                 ORDER BY eq.end_time ASC";
 
@@ -82,82 +98,106 @@ class GameEngine {
     }
 
     private function handleEvent(array $event): ?string {
-        // Switch prüft nun auf die neuen Typen
         switch ($event['event_type']) {
             case 'MISSION_RETURN': return $this->completeMission($event);
             case 'BUILDING_UPGRADE': return $this->completeBuildingUpgrade($event);
-            
             case 'NEGOTIATION_MONEY': return $this->completeNegotiation($event, 'MONEY');
             case 'NEGOTIATION_SCIENCE': return $this->completeNegotiation($event, 'SCIENCE');
             case 'NEGOTIATION_LOBBYING': return $this->completeNegotiation($event, 'LOBBYING');
-            
-            // Fallback für alte Events
             case 'BUDGET_NEGOTIATION': return $this->completeNegotiation($event, 'MONEY'); 
+            case 'MODULE_CONSTRUCTION': return $this->completeModuleConstruction($event);
+            case 'MODULE_LAUNCH': return $this->completeModuleLaunch($event);
+            case 'ASTRO_TRAINING': return $this->completeAstroTraining($event);
+            case 'CREW_LAUNCH': return $this->completeCrewLaunch($event); // NEU
             
             default: return "Unbekanntes Event (Typ: {$event['event_type']}) verarbeitet.";
         }
     }
 
     /**
-     * Schließt eine Verhandlung ab und berechnet Belohnung basierend auf Thema
+     * NEU: Crew dockt an
      */
+    private function completeCrewLaunch(array $event): string {
+        $astroId = $event['reference_id'];
+        
+        // 1. Astro Info holen (und Raketen-ID aus dem Temp-Feld)
+        $stmt = $this->db->prepare("SELECT * FROM astronauts WHERE id = :id");
+        $stmt->execute([':id' => $astroId]);
+        $astro = $stmt->fetch();
+        $rocketId = $astro['assigned_module_id']; // HACK: Hier haben wir die Raketen-ID gespeichert
+        
+        // 2. Astro Status updaten
+        $stmt = $this->db->prepare("UPDATE astronauts SET status = 'in_orbit', assigned_module_id = NULL WHERE id = :id");
+        $stmt->execute([':id' => $astroId]);
+        
+        // 3. Rakete befreien
+        $stmt = $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid");
+        $stmt->execute([':rid' => $rocketId]);
+        
+        return "🧑‍🚀 {$astro['name']} ist sicher auf der Station angekommen!";
+    }
+
+    // ... (Rest bleibt gleich) ...
+    private function completeAstroTraining(array $event): string {
+        $astroId = $event['reference_id'];
+        $this->db->prepare("UPDATE astronauts SET status = 'ready' WHERE id = :id")->execute([':id' => $astroId]);
+        $stmt = $this->db->prepare("SELECT name FROM astronauts WHERE id = :id");
+        $stmt->execute([':id' => $astroId]);
+        $name = $stmt->fetchColumn();
+        return "🎓 Training abgeschlossen: Astronaut $name ist bereit.";
+    }
+
+    private function completeModuleLaunch(array $event): string {
+        $moduleId = $event['reference_id'];
+        $stmt = $this->db->prepare("SELECT um.*, smt.name FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.id = :id");
+        $stmt->execute([':id' => $moduleId]);
+        $module = $stmt->fetch();
+        $rocketId = $module['condition_percent'];
+        $stmt = $this->db->prepare("UPDATE user_modules SET status = 'assembled', condition_percent = 100 WHERE id = :id");
+        $stmt->execute([':id' => $moduleId]);
+        $stmt = $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid");
+        $stmt->execute([':rid' => $rocketId]);
+        $this->db->prepare("UPDATE user_reputation SET reputation = LEAST(100, reputation + 2) WHERE user_id = :uid")->execute([':uid' => $event['user_id']]);
+        return "🛰️ ANDOCKMANÖVER ERFOLGREICH! '{$module['name']}' ist jetzt Teil der Raumstation.";
+    }
+
+    private function completeModuleConstruction(array $event): string {
+        $moduleId = $event['reference_id'];
+        $this->db->prepare("UPDATE user_modules SET status = 'stored' WHERE id = :id")->execute([':id' => $moduleId]);
+        $stmt = $this->db->prepare("SELECT smt.name FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.id = :id");
+        $stmt->execute([':id' => $moduleId]);
+        $name = $stmt->fetchColumn();
+        return "🏭 Fertigung abgeschlossen: '$name' liegt jetzt im Lager.";
+    }
+
     private function completeNegotiation(array $event, string $topic): string {
         $countryId = $event['reference_id'];
         $userId = $event['user_id'];
-        
-        // 1. Ruf und Land laden
-        $stmt = $this->db->prepare("SELECT c.name, IFNULL(ur.reputation, 50) as reputation 
-                                    FROM countries c 
-                                    LEFT JOIN user_reputation ur ON c.id = ur.country_id AND ur.user_id = :uid 
-                                    WHERE c.id = :cid");
+        $stmt = $this->db->prepare("SELECT c.name, IFNULL(ur.reputation, 50) as reputation FROM countries c LEFT JOIN user_reputation ur ON c.id = ur.country_id AND ur.user_id = :uid WHERE c.id = :cid");
         $stmt->execute([':cid' => $countryId, ':uid' => $userId]);
         $data = $stmt->fetch();
         $reputation = $data['reputation'];
         $countryName = $data['name'];
 
-        // 2. Belohnung berechnen
         if ($topic === 'MONEY') {
-            // Formel: 2 Mio Basis + (Ruf * 50.000)
             $amount = 2000000 + ($reputation * 50000);
-            $stmt = $this->db->prepare("UPDATE user_resources SET money = money + :val WHERE user_id = :uid");
-            $stmt->execute([':val' => $amount, ':uid' => $userId]);
-            return "💰 Budgeterhöhung aus $countryName erhalten: " . number_format($amount, 0, ',', '.') . " € (Ruf: $reputation)";
-        }
-        
-        elseif ($topic === 'SCIENCE') {
-            // Formel: 100 SP Basis + (Ruf * 5)
+            $this->db->prepare("UPDATE user_resources SET money = money + :val WHERE user_id = :uid")->execute([':val' => $amount, ':uid' => $userId]);
+            return "💰 Budgeterhöhung aus $countryName erhalten: " . number_format($amount, 0, ',', '.') . " €";
+        } elseif ($topic === 'SCIENCE') {
             $amount = 100 + ($reputation * 5);
-            $stmt = $this->db->prepare("UPDATE user_resources SET science_points = science_points + :val WHERE user_id = :uid");
-            $stmt->execute([':val' => $amount, ':uid' => $userId]);
+            $this->db->prepare("UPDATE user_resources SET science_points = science_points + :val WHERE user_id = :uid")->execute([':val' => $amount, ':uid' => $userId]);
             return "🔬 Technologie-Transfer mit $countryName: +$amount SP";
-        }
-        
-        elseif ($topic === 'LOBBYING') {
-            // Ruf steigt um 5 bis 10 Punkte
+        } elseif ($topic === 'LOBBYING') {
             $gain = rand(5, 10);
-            $newRep = min(100, $reputation + $gain);
-            
-            // Upsert (Insert oder Update) für Reputation
-            $sql = "INSERT INTO user_reputation (user_id, country_id, reputation) VALUES (:uid, :cid, :rep)
-                    ON DUPLICATE KEY UPDATE reputation = reputation + :gain";
-            // MySQL cap auf 100 machen wir hier im Code einfacher:
-            // Wir lesen es beim nächsten Mal eh neu. Aber um sauber zu sein:
             if ($reputation + $gain > 100) $gain = 100 - $reputation;
-            
             if ($gain > 0) {
-                $this->db->prepare("INSERT INTO user_reputation (user_id, country_id, reputation) VALUES (:uid, :cid, :base) 
-                                    ON DUPLICATE KEY UPDATE reputation = LEAST(100, reputation + :gain)")
-                         ->execute([':uid' => $userId, ':cid' => $countryId, ':base' => 50 + $gain, ':gain' => $gain]);
-                return "🤝 Erfolgreiches Lobbying in $countryName! Ruf verbessert um +$gain (Neu: " . ($reputation+$gain) . "/100).";
-            } else {
-                return "🤝 Lobbying in $countryName: Ruf ist bereits maximal (100).";
-            }
+                $this->db->prepare("INSERT INTO user_reputation (user_id, country_id, reputation) VALUES (:uid, :cid, :base) ON DUPLICATE KEY UPDATE reputation = LEAST(100, reputation + :gain)")->execute([':uid' => $userId, ':cid' => $countryId, ':base' => 50 + $gain, ':gain' => $gain]);
+                return "🤝 Erfolgreiches Lobbying in $countryName! Ruf verbessert um +$gain.";
+            } else { return "🤝 Lobbying in $countryName: Ruf ist bereits maximal."; }
         }
-
         return "Verhandlung beendet.";
     }
 
-    // ... (restliche Funktionen completeMission etc. bleiben gleich) ...
     private function completeMission(array $event): string {
         $rocketId = $event['reference_id'];
         $sql = "SELECT uf.*, mt.name as mission_name, mt.reward_money, mt.reward_science FROM user_fleet uf JOIN mission_types mt ON uf.current_mission_id = mt.id WHERE uf.id = :rid";
