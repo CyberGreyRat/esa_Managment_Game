@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Erstellungszeit: 16. Dez 2025 um 13:26
+-- Erstellungszeit: 16. Dez 2025 um 13:41
 -- Server-Version: 10.4.32-MariaDB
 -- PHP-Version: 8.2.12
 
@@ -20,7 +20,7 @@ SET time_zone = "+00:00";
 --
 -- Datenbank: `terrae_novae_erp`
 --
---neu--------------------------------------------------------
+
 -- --------------------------------------------------------
 
 --
@@ -41,10 +41,10 @@ CREATE TABLE `astronauts` (
 --
 
 INSERT INTO `astronauts` (`id`, `user_id`, `name`, `status`, `experience_level`, `assigned_module_id`) VALUES
-(1, 1, 'Dieter Schmidt', 'training', 1, NULL),
-(2, 1, 'Peter Doofi', 'training', 1, NULL),
-(3, 1, 'Hans Look', 'training', 1, NULL),
-(4, 1, 'Peere Lachs', 'training', 1, NULL);
+(1, 1, 'Dieter Schmidt', 'ready', 1, NULL),
+(2, 1, 'Peter Doofi', 'ready', 1, NULL),
+(3, 1, 'Hans Look', 'ready', 1, NULL),
+(4, 1, 'Peere Lachs', 'ready', 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -416,7 +416,16 @@ INSERT INTO `event_queue` (`id`, `user_id`, `event_type`, `reference_id`, `start
 (310, 1, 'MISSION_RETURN', 99, '2025-12-16 08:13:21', '2025-12-16 12:13:21', 1),
 (311, 1, 'MISSION_RETURN', 99, '2025-12-16 08:13:22', '2025-12-16 12:13:22', 1),
 (312, 1, 'MISSION_RETURN', 99, '2025-12-16 08:13:22', '2025-12-16 12:13:22', 1),
-(313, 1, 'MISSION_RETURN', 99, '2025-12-16 08:13:22', '2025-12-16 12:13:22', 1);
+(313, 1, 'MISSION_RETURN', 99, '2025-12-16 08:13:22', '2025-12-16 12:13:22', 1),
+(314, 1, 'MODULE_LAUNCH', 1, '2025-12-16 13:30:55', '2025-12-16 13:31:30', 1),
+(315, 1, 'MODULE_LAUNCH', 3, '2025-12-16 13:31:08', '2025-12-16 13:31:30', 1),
+(316, 1, 'MISSION_RETURN', 100, '2025-12-16 13:31:26', '2025-12-16 13:31:30', 1),
+(317, 1, 'MISSION_RETURN', 99, '2025-12-16 13:31:28', '2025-12-16 13:31:30', 1),
+(328, 1, 'MODULE_LAUNCH', 5, '2025-12-16 13:38:06', '2025-12-16 13:38:13', 1),
+(329, 1, 'MODULE_LAUNCH', 4, '2025-12-16 13:38:16', '2025-12-16 13:38:16', 1),
+(330, 1, 'MODULE_LAUNCH', 2, '2025-12-16 13:38:19', '2025-12-16 13:38:19', 1),
+(332, 1, 'MISSION_RETURN', 101, '2025-12-16 13:38:29', '2025-12-16 13:38:32', 1),
+(333, 1, 'MISSION_RETURN', 102, '2025-12-16 13:38:31', '2025-12-16 13:38:32', 1);
 
 -- --------------------------------------------------------
 
@@ -491,9 +500,9 @@ CREATE TABLE `specialists` (
 --
 
 INSERT INTO `specialists` (`id`, `name`, `type`, `salary_cost`, `skill_value`, `avatar_image`, `user_id`, `busy_until`) VALUES
-(1, 'Dr. Schmidt', 'Scientist', 50000, 10, 'avatar_scientist_m.png', 1, '2025-12-16 13:06:54'),
-(2, 'Prof. Hamilton', 'Scientist', 120000, 25, 'avatar_scientist_f.png', 1, '2025-12-16 13:06:54'),
-(3, 'Ing. Kowalski', 'Engineer', 45000, 5, 'avatar_engineer_m.png', 1, '2025-12-16 13:06:54');
+(1, 'Dr. Schmidt', 'Scientist', 50000, 10, 'avatar_scientist_m.png', 1, NULL),
+(2, 'Prof. Hamilton', 'Scientist', 120000, 25, 'avatar_scientist_f.png', 1, NULL),
+(3, 'Ing. Kowalski', 'Engineer', 45000, 5, 'avatar_engineer_m.png', 1, NULL);
 
 -- --------------------------------------------------------
 
@@ -568,7 +577,7 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`id`, `username`, `password_hash`, `email`, `created_at`, `last_active`) VALUES
-(1, 'Elon', 'hash123', 'elon@mars.com', '2025-12-16 08:28:34', '2025-12-16 12:13:26');
+(1, 'Elon', 'hash123', 'elon@mars.com', '2025-12-16 08:28:34', '2025-12-16 12:38:48');
 
 -- --------------------------------------------------------
 
@@ -615,10 +624,10 @@ CREATE TABLE `user_fleet` (
 --
 
 INSERT INTO `user_fleet` (`id`, `user_id`, `rocket_type_id`, `name`, `status`, `flights_completed`, `current_mission_id`) VALUES
-(99, 1, 1, 'Test-Rakete', 'idle', 112, NULL),
-(100, 1, 1, 'Vega-C #217', 'idle', 47, NULL),
-(101, 1, 3, 'Falcon 9 #959', 'idle', 33, NULL),
-(102, 1, 2, 'Ariane 62 #104', 'idle', 24, NULL);
+(99, 1, 1, 'Test-Rakete', 'idle', 113, NULL),
+(100, 1, 1, 'Vega-C #217', 'idle', 48, NULL),
+(101, 1, 3, 'Falcon 9 #959', 'idle', 38, NULL),
+(102, 1, 2, 'Ariane 62 #104', 'idle', 26, NULL);
 
 -- --------------------------------------------------------
 
@@ -640,11 +649,11 @@ CREATE TABLE `user_modules` (
 --
 
 INSERT INTO `user_modules` (`id`, `user_id`, `module_type_id`, `status`, `condition_percent`, `created_at`) VALUES
-(1, 1, 2, 'constructing', 100, '2025-12-16 11:39:26'),
-(2, 1, 1, 'constructing', 100, '2025-12-16 11:39:53'),
-(3, 1, 2, 'constructing', 100, '2025-12-16 11:59:42'),
-(4, 1, 1, 'constructing', 100, '2025-12-16 11:59:44'),
-(5, 1, 3, 'constructing', 100, '2025-12-16 11:59:46');
+(1, 1, 2, 'assembled', 100, '2025-12-16 11:39:26'),
+(2, 1, 1, 'assembled', 100, '2025-12-16 11:39:53'),
+(3, 1, 2, 'assembled', 100, '2025-12-16 11:59:42'),
+(4, 1, 1, 'assembled', 100, '2025-12-16 11:59:44'),
+(5, 1, 3, 'assembled', 100, '2025-12-16 11:59:46');
 
 -- --------------------------------------------------------
 
@@ -676,7 +685,7 @@ CREATE TABLE `user_resources` (
 --
 
 INSERT INTO `user_resources` (`user_id`, `money`, `science_points`, `prestige`) VALUES
-(1, 514815407.11, 13888, 0);
+(1, 535815407.11, 14053, 0);
 
 -- --------------------------------------------------------
 
@@ -860,7 +869,7 @@ ALTER TABLE `countries`
 -- AUTO_INCREMENT für Tabelle `event_queue`
 --
 ALTER TABLE `event_queue`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=314;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=335;
 
 --
 -- AUTO_INCREMENT für Tabelle `mission_types`

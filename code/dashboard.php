@@ -27,30 +27,34 @@ $astroManager = new AstronautManager();
 $neuigkeiten = $engine->processQueue($userId);
 $activeEvents = $engine->getActiveEvents($userId);
 
-// 3. POST Handling
+// POST Handling
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $result = ['success' => false, 'message' => 'Unbekannte Aktion'];
     
-    if ($_POST['action'] === 'start_mission') {
-        $result = $missionControl->startMission($userId, (int)$_POST['rocket_id'], (int)$_POST['mission_id']);
-    } elseif ($_POST['action'] === 'upgrade_building') {
-        $result = $buildingManager->startUpgrade($userId, (int)$_POST['building_type_id']);
-    } elseif ($_POST['action'] === 'buy_rocket') {
-        $result = $marketplace->buyRocket($userId, (int)$_POST['rocket_type_id']);
-    } elseif ($_POST['action'] === 'research_tech') {
-        $result = $researchManager->research($userId, (int)$_POST['tech_id']);
-    } elseif ($_POST['action'] === 'hire_spec') {
-        $result = $hrManager->hireSpecialist($userId, (int)$_POST['spec_id']);
-    } elseif ($_POST['action'] === 'negotiate') { 
-        $result = $politicsManager->startNegotiation($userId, (int)$_POST['country_id'], (int)$_POST['specialist_id'], $_POST['topic']);
-    } elseif ($_POST['action'] === 'build_module') { 
-        $result = $stationManager->constructModule($userId, (int)$_POST['module_type_id']);
-    } elseif ($_POST['action'] === 'launch_module') { 
-        $result = $missionControl->launchModule($userId, (int)$_POST['rocket_id'], (int)$_POST['module_id']);
-    } elseif ($_POST['action'] === 'recruit_astro') { 
-        $result = $astroManager->recruitAstronaut($userId, $_POST['name']);
-    } elseif ($_POST['action'] === 'launch_astro') { 
-        $result = $missionControl->launchAstronaut($userId, (int)$_POST['rocket_id'], (int)$_POST['astro_id']);
+    try {
+        if ($_POST['action'] === 'start_mission') {
+            $result = $missionControl->startMission($userId, (int)$_POST['rocket_id'], (int)$_POST['mission_id']);
+        } elseif ($_POST['action'] === 'upgrade_building') {
+            $result = $buildingManager->startUpgrade($userId, (int)$_POST['building_type_id']);
+        } elseif ($_POST['action'] === 'buy_rocket') {
+            $result = $marketplace->buyRocket($userId, (int)$_POST['rocket_type_id']);
+        } elseif ($_POST['action'] === 'research_tech') {
+            $result = $researchManager->research($userId, (int)$_POST['tech_id']);
+        } elseif ($_POST['action'] === 'hire_spec') {
+            $result = $hrManager->hireSpecialist($userId, (int)$_POST['spec_id']);
+        } elseif ($_POST['action'] === 'negotiate') { 
+            $result = $politicsManager->startNegotiation($userId, (int)$_POST['country_id'], (int)$_POST['specialist_id'], $_POST['topic']);
+        } elseif ($_POST['action'] === 'build_module') { 
+            $result = $stationManager->constructModule($userId, (int)$_POST['module_type_id']);
+        } elseif ($_POST['action'] === 'launch_module') { 
+            $result = $missionControl->launchModule($userId, (int)$_POST['rocket_id'], (int)$_POST['module_id']);
+        } elseif ($_POST['action'] === 'recruit_astro') { 
+            $result = $astroManager->recruitAstronaut($userId, $_POST['name']);
+        } elseif ($_POST['action'] === 'launch_astro') { 
+            $result = $missionControl->launchAstronaut($userId, (int)$_POST['rocket_id'], (int)$_POST['astro_id']);
+        }
+    } catch (Exception $e) {
+        $result = ['success' => false, 'message' => 'Fehler: ' . $e->getMessage()];
     }
 
     $_SESSION[($result['success'] ? 'flash_success' : 'flash_error')] = $result['message'];
@@ -58,7 +62,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-// 4. Daten laden
+// Daten laden
 $player = new Player($userId);
 $availableMissions = $missionControl->getAvailableMissions();
 $myBuildings = $buildingManager->getBuildings($userId); 
@@ -74,10 +78,10 @@ $myFleet = $player->getFleet();
 $stationStats = $stationManager->getStationStats($userId); 
 
 // Status Farbe
-$stationColor = '#3498db'; // Blau (Neutral)
+$stationColor = '#3498db'; 
 if ($stationStats['module_count'] > 0) {
-    if ($stationStats['total_power'] < 0) $stationColor = '#e74c3c'; // Rot (Offline)
-    else $stationColor = '#27ae60'; // Grün (Online)
+    if ($stationStats['total_power'] < 0) $stationColor = '#e74c3c'; 
+    else $stationColor = '#27ae60'; 
 }
 
 // Flash Messages
@@ -121,12 +125,6 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         .timer-item { background: #0f3460; padding: 10px 15px; border-radius: 5px; border: 1px solid #4ecca3; flex: 1; min-width: 200px; }
         .timer-time { font-size: 1.2em; font-weight: bold; color: #fff; font-family: 'Courier New', monospace; }
         
-        .flag-icon { width: 24px; height: 16px; display: inline-block; margin-right: 8px; vertical-align: middle; border: 1px solid #555; }
-        .flag-de { background: linear-gradient(to bottom, #000 33%, #D00 33%, #D00 66%, #FFCE00 66%); }
-        .flag-fr { background: linear-gradient(to right, #0055A4 33%, #FFF 33%, #FFF 66%, #EF4135 66%); }
-        .flag-it { background: linear-gradient(to right, #009246 33%, #FFF 33%, #FFF 66%, #CE2B37 66%); }
-        .flag-us { background: #3C3B6E; } 
-        
         .alert { padding: 15px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; }
         .alert-info { background: #4ecca3; color: #1a1a2e; }
         .alert-error { background: #e94560; color: white; }
@@ -134,6 +132,11 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         select, input[type=text] { background: #0f3460; color: white; border: 1px solid #4ecca3; padding: 5px; border-radius: 4px; width: auto; margin-bottom: 5px;}
         .list-style-none { list-style: none; padding: 0; }
         .list-item { background: #1a1a2e; padding: 15px; margin-bottom: 10px; border-left: 4px solid #4ecca3; }
+        .flag-icon { width: 24px; height: 16px; display: inline-block; margin-right: 8px; vertical-align: middle; border: 1px solid #555; }
+        .flag-de { background: linear-gradient(to bottom, #000 33%, #D00 33%, #D00 66%, #FFCE00 66%); }
+        .flag-fr { background: linear-gradient(to right, #0055A4 33%, #FFF 33%, #FFF 66%, #EF4135 66%); }
+        .flag-it { background: linear-gradient(to right, #009246 33%, #FFF 33%, #FFF 66%, #CE2B37 66%); }
+        .flag-us { background: #3C3B6E; } 
     </style>
 </head>
 <body>
@@ -196,7 +199,7 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                 </div>
                 <div>
                     <div style="font-size:2em; font-weight:bold; color:<?= $stationStats['total_power'] >= 0 ? '#f1c40f' : '#e74c3c' ?>;"><?= $stationStats['total_power'] ?> kW</div>
-                    <div style="color:#aaa;">Energie-Bilanz</div>
+                    <div style="color:#aaa;">Energie</div>
                 </div>
                 <div>
                     <div style="font-size:2em; font-weight:bold; color:<?= $stationStats['current_crew'] <= $stationStats['total_crew_slots'] ? '#e74c3c' : '#f1c40f' ?>;">
@@ -324,7 +327,7 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
 
             <!-- RECHTE SPALTE -->
             <div>
-                <!-- POLITIK (Gekürzt) -->
+                <!-- POLITIK -->
                 <div class="card" style="border-top: 4px solid #2980b9;">
                     <h2 style="color: #3498db; border-color: #2980b9;">🌍 Politik</h2>
                     <ul class="list-style-none">
@@ -344,34 +347,6 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                         <button class="btn btn-neg">Go</button>
                                     </form>
                                 </div>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-
-                <!-- GEBÄUDE (Wieder da!) -->
-                <div class="card">
-                    <h2>Basis Infrastruktur</h2>
-                    <ul class="list-style-none">
-                        <?php foreach ($myBuildings as $b): ?>
-                            <li class="list-item">
-                                <div style="display:flex; justify-content:space-between;">
-                                    <strong><?= htmlspecialchars($b['name']) ?></strong>
-                                    <span>Lvl <?= $b['current_level'] ?? 0 ?></span>
-                                </div>
-                                <div style="font-size:0.85em; color:#aaa; margin-bottom:5px;"><?= htmlspecialchars($b['description']) ?></div>
-                                
-                                <?php if (isset($b['status']) && $b['status'] === 'upgrading'): ?>
-                                    <div style="color:#f1c40f; font-weight:bold; margin-top:5px;">🚧 Wird ausgebaut...</div>
-                                <?php else: ?>
-                                    <form method="POST" style="margin-top:5px">
-                                        <input type="hidden" name="action" value="upgrade_building">
-                                        <input type="hidden" name="building_type_id" value="<?= $b['type_id'] ?>">
-                                        <button class="btn" style="width:100%; font-size:0.8em; background:#2c3e50;">
-                                            ⬆️ Ausbauen (<?= number_format($b['next_cost'],0,',','.') ?>€)
-                                        </button>
-                                    </form>
-                                <?php endif; ?>
                             </li>
                         <?php endforeach; ?>
                     </ul>
