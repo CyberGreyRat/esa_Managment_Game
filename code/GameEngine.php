@@ -10,9 +10,12 @@ class GameEngine {
 
     public function processQueue(int $userId): array {
         $messages = [];
+        
+        // 1. Passive Forschung & Stations-Status berechnen
         $passiveMsg = $this->calculatePassiveScience($userId);
         if ($passiveMsg) $messages[] = $passiveMsg;
 
+        // 2. Events abarbeiten
         $sql = "SELECT * FROM event_queue WHERE user_id = :uid AND end_time <= NOW() AND is_processed = 0 ORDER BY end_time ASC";
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':uid' => $userId]);
@@ -28,41 +31,102 @@ class GameEngine {
         return $messages;
     }
 
+    /**
+     * Berechnet Forschung UND prüft die Lebenserhaltung der Station
+     */
     private function calculatePassiveScience(int $userId): ?string {
         $stmt = $this->db->prepare("SELECT last_active FROM users WHERE id = :uid");
         $stmt->execute([':uid' => $userId]);
         $lastActiveStr = $stmt->fetchColumn();
         if (!$lastActiveStr) return null;
-        $diff = (new DateTime())->getTimestamp() - (new DateTime($lastActiveStr))->getTimestamp();
-        if ($diff < 10) return null;
-
-        // Station Bonus + Crew
-        $stmt = $this->db->prepare("SELECT COUNT(*) FROM user_modules WHERE user_id = :uid AND status = 'assembled'");
-        $stmt->execute([':uid' => $userId]);
-        $stationModulesCount = (int)$stmt->fetchColumn();
         
+        $diff = (new DateTime())->getTimestamp() - (new DateTime($lastActiveStr))->getTimestamp();
+        if ($diff < 10) return null; // Erst ab 10 Sekunden berechnen
+
+        // --- STATIONS-CHECK ---
+        
+        // 1. Werte der Station holen (Strom & Kapazität)
+        // Wir summieren alle Module, die 'assembled' (angedockt) sind.
+        $stmt = $this->db->prepare("
+            SELECT 
+                COALESCE(SUM(smt.power_generation), 0) as total_power,
+                COALESCE(SUM(smt.crew_capacity), 0) as total_capacity,
+                COUNT(um.id) as module_count
+            FROM user_modules um
+            JOIN station_module_types smt ON um.module_type_id = smt.id
+            WHERE um.user_id = :uid AND um.status = 'assembled'
+        ");
+        $stmt->execute([':uid' => $userId]);
+        $stats = $stmt->fetch();
+        
+        $power = (int)$stats['total_power'];
+        $capacity = (int)$stats['total_capacity'];
+        $moduleCount = (int)$stats['module_count'];
+
+        // 2. Crew zählen
         $stmt = $this->db->prepare("SELECT COUNT(*) FROM astronauts WHERE user_id = :uid AND status = 'in_orbit'");
         $stmt->execute([':uid' => $userId]);
-        $astroCount = (int)$stmt->fetchColumn();
+        $crewCount = (int)$stmt->fetchColumn();
 
-        $stationBonus = ($stationModulesCount * 50) + ($astroCount * 200);
+        // 3. Status ermitteln
+        $isOnline = true;
+        $statusWarnung = "";
 
+        // REGEL: Strom muss >= 0 sein
+        if ($power < 0) {
+            $isOnline = false;
+            $statusWarnung = "⚠️ <strong>ALARM:</strong> Energieausfall! Station ist OFFLINE.";
+        }
+
+        // REGEL: Crew darf Kapazität nicht überschreiten
+        if ($crewCount > $capacity) {
+            $statusWarnung .= " ⚠️ <strong>ALARM:</strong> Lebenserhaltung überlastet! ($crewCount/$capacity)";
+            // Wir könnten hier Astronauten sterben lassen, aber wir ziehen erstmal nur den Bonus ab.
+        }
+
+        // --- FORSCHUNG BERECHNEN ---
+
+        // Basis (Erde)
         $stmt = $this->db->prepare("SELECT current_level FROM user_buildings WHERE user_id = :uid AND building_type_id = 2");
         $stmt->execute([':uid' => $userId]);
         $labLevel = (int)$stmt->fetchColumn(); 
+        
         $stmt = $this->db->prepare("SELECT SUM(skill_value) FROM specialists WHERE user_id = :uid AND type = 'Scientist'");
         $stmt->execute([':uid' => $userId]);
         $scientistBonus = (int)$stmt->fetchColumn();
 
+        // Station Bonus (Nur wenn Online!)
+        $stationBonus = 0;
+        if ($isOnline) {
+            // 50 SP pro Modul
+            $modBonus = $moduleCount * 50;
+            // 200 SP pro Astronaut (aber nur für die, die Platz haben!)
+            $validCrew = min($crewCount, $capacity);
+            $crewBonus = $validCrew * 200;
+            
+            $stationBonus = $modBonus + $crewBonus;
+        }
+
         $rate = ($labLevel * 10) + $scientistBonus + $stationBonus;
         
-        if ($rate <= 0) return null;
+        if ($rate <= 0 && $isOnline) return null;
 
         $earned = floor(($diff / 3600) * $rate);
+        
         if ($earned > 0) {
             $this->db->query("UPDATE user_resources SET science_points = science_points + $earned WHERE user_id = $userId");
-            return "🧪 Passive Forschung (Station & Crew): +$earned SP";
+            
+            $msg = "🧪 Forschung: +$earned SP generiert.";
+            if ($statusWarnung !== "") {
+                $msg .= "<br>" . $statusWarnung;
+            }
+            return $msg;
         }
+        
+        if (!$isOnline) {
+            return $statusWarnung; // Nur Warnung zeigen, wenn nichts verdient wurde
+        }
+        
         return null;
     }
     
@@ -108,36 +172,27 @@ class GameEngine {
             case 'MODULE_CONSTRUCTION': return $this->completeModuleConstruction($event);
             case 'MODULE_LAUNCH': return $this->completeModuleLaunch($event);
             case 'ASTRO_TRAINING': return $this->completeAstroTraining($event);
-            case 'CREW_LAUNCH': return $this->completeCrewLaunch($event); // NEU
+            case 'CREW_LAUNCH': return $this->completeCrewLaunch($event); 
             
             default: return "Unbekanntes Event (Typ: {$event['event_type']}) verarbeitet.";
         }
     }
 
-    /**
-     * NEU: Crew dockt an
-     */
+    // --- ABSCHLUSS-FUNKTIONEN ---
+
     private function completeCrewLaunch(array $event): string {
         $astroId = $event['reference_id'];
-        
-        // 1. Astro Info holen (und Raketen-ID aus dem Temp-Feld)
         $stmt = $this->db->prepare("SELECT * FROM astronauts WHERE id = :id");
         $stmt->execute([':id' => $astroId]);
         $astro = $stmt->fetch();
-        $rocketId = $astro['assigned_module_id']; // HACK: Hier haben wir die Raketen-ID gespeichert
+        $rocketId = $astro['assigned_module_id']; // Rakete war hier gespeichert
         
-        // 2. Astro Status updaten
-        $stmt = $this->db->prepare("UPDATE astronauts SET status = 'in_orbit', assigned_module_id = NULL WHERE id = :id");
-        $stmt->execute([':id' => $astroId]);
-        
-        // 3. Rakete befreien
-        $stmt = $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid");
-        $stmt->execute([':rid' => $rocketId]);
+        $this->db->prepare("UPDATE astronauts SET status = 'in_orbit', assigned_module_id = NULL WHERE id = :id")->execute([':id' => $astroId]);
+        $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid")->execute([':rid' => $rocketId]);
         
         return "🧑‍🚀 {$astro['name']} ist sicher auf der Station angekommen!";
     }
 
-    // ... (Rest bleibt gleich) ...
     private function completeAstroTraining(array $event): string {
         $astroId = $event['reference_id'];
         $this->db->prepare("UPDATE astronauts SET status = 'ready' WHERE id = :id")->execute([':id' => $astroId]);
@@ -149,28 +204,34 @@ class GameEngine {
 
     private function completeModuleLaunch(array $event): string {
         $moduleId = $event['reference_id'];
+        
         $stmt = $this->db->prepare("SELECT um.*, smt.name FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.id = :id");
         $stmt->execute([':id' => $moduleId]);
         $module = $stmt->fetch();
-        $rocketId = $module['condition_percent'];
-        $stmt = $this->db->prepare("UPDATE user_modules SET status = 'assembled', condition_percent = 100 WHERE id = :id");
-        $stmt->execute([':id' => $moduleId]);
-        $stmt = $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid");
-        $stmt->execute([':rid' => $rocketId]);
-        $this->db->prepare("UPDATE user_reputation SET reputation = LEAST(100, reputation + 2) WHERE user_id = :uid")->execute([':uid' => $event['user_id']]);
-        return "🛰️ ANDOCKMANÖVER ERFOLGREICH! '{$module['name']}' ist jetzt Teil der Raumstation.";
+        
+        $rocketId = $module['condition_percent']; // Rakete war hier gespeichert
+        
+        $this->db->prepare("UPDATE user_modules SET status = 'assembled', condition_percent = 100 WHERE id = :id")->execute([':id' => $moduleId]);
+        $this->db->prepare("UPDATE user_fleet SET status = 'idle', flights_completed = flights_completed + 1 WHERE id = :rid")->execute([':rid' => $rocketId]);
+        $this->db->prepare("UPDATE user_reputation SET reputation = LEAST(100, reputation + 5) WHERE user_id = :uid")->execute([':uid' => $event['user_id']]);
+        
+        return "🛰️ ANDOCKMANÖVER ERFOLGREICH! '{$module['name']}' ist jetzt Teil der Station.";
     }
 
     private function completeModuleConstruction(array $event): string {
         $moduleId = $event['reference_id'];
         $this->db->prepare("UPDATE user_modules SET status = 'stored' WHERE id = :id")->execute([':id' => $moduleId]);
+        
         $stmt = $this->db->prepare("SELECT smt.name FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.id = :id");
         $stmt->execute([':id' => $moduleId]);
         $name = $stmt->fetchColumn();
+        
         return "🏭 Fertigung abgeschlossen: '$name' liegt jetzt im Lager.";
     }
 
     private function completeNegotiation(array $event, string $topic): string {
+        // ... (Bleibt gleich wie vorher) ...
+        // Ich kürze hier ab, da der Code identisch zum vorherigen Post ist
         $countryId = $event['reference_id'];
         $userId = $event['user_id'];
         $stmt = $this->db->prepare("SELECT c.name, IFNULL(ur.reputation, 50) as reputation FROM countries c LEFT JOIN user_reputation ur ON c.id = ur.country_id AND ur.user_id = :uid WHERE c.id = :cid");
@@ -189,11 +250,8 @@ class GameEngine {
             return "🔬 Technologie-Transfer mit $countryName: +$amount SP";
         } elseif ($topic === 'LOBBYING') {
             $gain = rand(5, 10);
-            if ($reputation + $gain > 100) $gain = 100 - $reputation;
-            if ($gain > 0) {
-                $this->db->prepare("INSERT INTO user_reputation (user_id, country_id, reputation) VALUES (:uid, :cid, :base) ON DUPLICATE KEY UPDATE reputation = LEAST(100, reputation + :gain)")->execute([':uid' => $userId, ':cid' => $countryId, ':base' => 50 + $gain, ':gain' => $gain]);
-                return "🤝 Erfolgreiches Lobbying in $countryName! Ruf verbessert um +$gain.";
-            } else { return "🤝 Lobbying in $countryName: Ruf ist bereits maximal."; }
+            $this->db->prepare("INSERT INTO user_reputation (user_id, country_id, reputation) VALUES (:uid, :cid, :base) ON DUPLICATE KEY UPDATE reputation = LEAST(100, reputation + :gain)")->execute([':uid' => $userId, ':cid' => $countryId, ':base' => 50 + $gain, ':gain' => $gain]);
+            return "🤝 Erfolgreiches Lobbying in $countryName!";
         }
         return "Verhandlung beendet.";
     }
@@ -204,11 +262,15 @@ class GameEngine {
         $stmt = $this->db->prepare($sql);
         $stmt->execute([':rid' => $rocketId]);
         $data = $stmt->fetch();
-        $gewinn = $data ? $data['reward_money'] : 0;
+        
+        // Fallback falls alte Daten
+        $gewinn = $data ? $data['reward_money'] : 2000000;
         $science = $data ? $data['reward_science'] : 0;
         $missionName = $data ? $data['mission_name'] : "Mission";
+
         $this->db->prepare("UPDATE user_resources SET money = money + :m, science_points = science_points + :s WHERE user_id = :uid")->execute([':m'=>$gewinn, ':s'=>$science, ':uid'=>$event['user_id']]);
         $this->db->prepare("UPDATE user_fleet SET status = 'idle', current_mission_id = NULL, flights_completed = flights_completed + 1 WHERE id = :rid")->execute([':rid'=>$rocketId]);
+        
         return "🚀 Mission '$missionName' erfolgreich! +".number_format($gewinn/1000000,1)."M € & +$science SP";
     }
 

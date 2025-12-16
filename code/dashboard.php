@@ -49,6 +49,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $result = $missionControl->launchModule($userId, (int)$_POST['rocket_id'], (int)$_POST['module_id']);
     } elseif ($_POST['action'] === 'recruit_astro') { 
         $result = $astroManager->recruitAstronaut($userId, $_POST['name']);
+    } elseif ($_POST['action'] === 'launch_astro') { 
+        $result = $missionControl->launchAstronaut($userId, (int)$_POST['rocket_id'], (int)$_POST['astro_id']);
     }
 
     $_SESSION[($result['success'] ? 'flash_success' : 'flash_error')] = $result['message'];
@@ -69,6 +71,14 @@ $blueprints = $stationManager->getBlueprints($userId);
 $inventory = $stationManager->getInventory($userId); 
 $astronauts = $astroManager->getAstronauts($userId); 
 $myFleet = $player->getFleet();
+$stationStats = $stationManager->getStationStats($userId); 
+
+// Status Farbe
+$stationColor = '#3498db'; // Blau (Neutral)
+if ($stationStats['module_count'] > 0) {
+    if ($stationStats['total_power'] < 0) $stationColor = '#e74c3c'; // Rot (Offline)
+    else $stationColor = '#27ae60'; // Grün (Online)
+}
 
 // Flash Messages
 $errorMsg = null; $successMsg = null;
@@ -105,15 +115,8 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         .btn-research { background: #8e44ad; }
         .btn-buy { background: #d35400; }
         .btn-astro { background: #16a085; } .btn-astro:hover { background: #1abc9c; }
-        
-        .alert { padding: 15px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; }
-        .alert-info { background: #4ecca3; color: #1a1a2e; }
-        .alert-error { background: #e94560; color: white; }
-        
-        select, input[type=text] { background: #0f3460; color: white; border: 1px solid #4ecca3; padding: 5px; border-radius: 4px; width: auto; margin-bottom: 5px;}
-        .list-style-none { list-style: none; padding: 0; }
-        .list-item { background: #1a1a2e; padding: 15px; margin-bottom: 10px; border-left: 4px solid #4ecca3; }
-        
+        .btn-debug { background: #e67e22; font-size: 0.8em; padding: 5px 10px; }
+
         .timer-list { list-style: none; padding: 0; display: flex; gap: 10px; flex-wrap: wrap; }
         .timer-item { background: #0f3460; padding: 10px 15px; border-radius: 5px; border: 1px solid #4ecca3; flex: 1; min-width: 200px; }
         .timer-time { font-size: 1.2em; font-weight: bold; color: #fff; font-family: 'Courier New', monospace; }
@@ -123,6 +126,14 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         .flag-fr { background: linear-gradient(to right, #0055A4 33%, #FFF 33%, #FFF 66%, #EF4135 66%); }
         .flag-it { background: linear-gradient(to right, #009246 33%, #FFF 33%, #FFF 66%, #CE2B37 66%); }
         .flag-us { background: #3C3B6E; } 
+        
+        .alert { padding: 15px; margin-bottom: 20px; border-radius: 5px; font-weight: bold; }
+        .alert-info { background: #4ecca3; color: #1a1a2e; }
+        .alert-error { background: #e94560; color: white; }
+        
+        select, input[type=text] { background: #0f3460; color: white; border: 1px solid #4ecca3; padding: 5px; border-radius: 4px; width: auto; margin-bottom: 5px;}
+        .list-style-none { list-style: none; padding: 0; }
+        .list-item { background: #1a1a2e; padding: 15px; margin-bottom: 10px; border-left: 4px solid #4ecca3; }
     </style>
 </head>
 <body>
@@ -159,6 +170,7 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                     elseif ($event['event_type'] === 'MODULE_CONSTRUCTION') echo "🏭 Bau: " . htmlspecialchars($event['module_name'] ?? '');
                                     elseif ($event['event_type'] === 'MODULE_LAUNCH') echo "🚀 START: " . htmlspecialchars($event['module_name'] ?? '');
                                     elseif ($event['event_type'] === 'ASTRO_TRAINING') echo "🎓 Training: " . htmlspecialchars($event['astronaut_name'] ?? '');
+                                    elseif ($event['event_type'] === 'CREW_LAUNCH') echo "🧑‍🚀 Flug zur Station";
                                 ?>
                             </div>
                             <div class="timer-time">Berechne...</div>
@@ -167,6 +179,33 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                 </ul>
             </div>
         <?php endif; ?>
+
+        <!-- STATION STATUS -->
+        <div class="card" style="border-top: 4px solid <?= $stationColor ?>; background: linear-gradient(to right, #16213e, #0f3460);">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid #333; padding-bottom:10px; margin-bottom:15px;">
+                <h2 style="color: <?= $stationColor ?>; border:none; margin:0;">🛰️ Raumstation "Gateway Earth"</h2>
+                <div style="font-weight:bold; color: <?= $stationColor ?>">
+                    <?= $stationStats['module_count'] > 0 ? ($stationStats['total_power'] >= 0 ? "✅ ONLINE" : "⚠️ OFFLINE (Strom!)") : "🚧 Noch nicht gebaut" ?>
+                </div>
+            </div>
+            
+            <div style="display:flex; justify-content:space-around; text-align:center;">
+                <div>
+                    <div style="font-size:2em; font-weight:bold; color:white;"><?= $stationStats['module_count'] ?></div>
+                    <div style="color:#aaa;">Module</div>
+                </div>
+                <div>
+                    <div style="font-size:2em; font-weight:bold; color:<?= $stationStats['total_power'] >= 0 ? '#f1c40f' : '#e74c3c' ?>;"><?= $stationStats['total_power'] ?> kW</div>
+                    <div style="color:#aaa;">Energie-Bilanz</div>
+                </div>
+                <div>
+                    <div style="font-size:2em; font-weight:bold; color:<?= $stationStats['current_crew'] <= $stationStats['total_crew_slots'] ? '#e74c3c' : '#f1c40f' ?>;">
+                        <?= $stationStats['current_crew'] ?> / <?= $stationStats['total_crew_slots'] ?>
+                    </div>
+                    <div style="color:#aaa;">Crew Belegung</div>
+                </div>
+            </div>
+        </div>
 
         <div class="grid">
             <!-- LINKE SPALTE -->
@@ -184,7 +223,19 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                 <div>
                                     <?php if ($astro['status'] == 'in_orbit'): ?> <span style="color:#4ecca3">🛰️ Im All</span>
                                     <?php elseif ($astro['status'] == 'training'): ?> <span style="color:#f1c40f">🎓 Training</span>
-                                    <?php else: ?> <span style="color:#aaa">Bereit</span> <?php endif; ?>
+                                    <?php elseif ($astro['status'] == 'ready'): ?>
+                                        <form method="POST" style="display:inline-flex; gap:5px;">
+                                            <input type="hidden" name="action" value="launch_astro">
+                                            <input type="hidden" name="astro_id" value="<?= $astro['id'] ?>">
+                                            <select name="rocket_id" style="width:120px; padding:2px;">
+                                                <option value="">-- Rakete --</option>
+                                                <?php foreach ($myFleet as $ship): if ($ship['status'] == 'idle'): ?>
+                                                    <option value="<?= $ship['id'] ?>"><?= htmlspecialchars($ship['rocket_name']) ?></option>
+                                                <?php endif; endforeach; ?>
+                                            </select>
+                                            <button class="btn btn-astro">Starten</button>
+                                        </form>
+                                    <?php endif; ?>
                                 </div>
                             </li>
                         <?php endforeach; ?>
@@ -231,10 +282,9 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                         <?php endif; ?>
                                     </div>
                                     
-                                    <!-- LAUNCH BEREICH (Fehlersuche & Button) -->
+                                    <!-- LAUNCH BEREICH -->
                                     <?php if ($item['status'] === 'stored'): ?>
                                         <?php 
-                                            // Wir prüfen direkt hier, ob wir eine passende Rakete haben
                                             $compatibleRockets = [];
                                             foreach ($myFleet as $ship) {
                                                 if ($ship['status'] == 'idle' && $ship['cargo_capacity_leo'] >= $item['mass_kg']) {
@@ -258,7 +308,6 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                             <div style="color:#e94560; font-size:0.9em; background:#300; padding:5px; border-radius:3px;">
                                                 ⚠️ Keine passende Rakete bereit! 
                                                 <br>Benötigt: <?= number_format($item['mass_kg']) ?>kg Kapazität.
-                                                <br>Prüfe: Ist deine Rakete 'idle'? Hast du eine Ariane 62?
                                             </div>
                                         <?php endif; ?>
                                         
