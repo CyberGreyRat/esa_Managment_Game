@@ -13,7 +13,6 @@ class MissionControl {
         return $stmt->fetchAll();
     }
 
-    // ... startMission und launchModule bleiben gleich ...
     public function startMission(int $userId, int $rocketId, int $missionId): array {
         try {
             $this->db->beginTransaction();
@@ -38,7 +37,7 @@ class MissionControl {
                      ->execute([':uid' => $userId, ':rid' => $rocketId, ':dur' => $mission['duration_seconds']]);
 
             $this->db->commit();
-            return ['success' => true, 'message' => "Start erfolgreich! Mission läuft."];
+            return ['success' => true, 'message' => "Start erfolgreich! Mission '{$mission['name']}' läuft."];
         } catch (Exception $e) {
             if ($this->db->inTransaction()) $this->db->rollBack();
             return ['success' => false, 'message' => $e->getMessage()];
@@ -80,20 +79,18 @@ class MissionControl {
     }
 
     /**
-     * NEU: Schickt einen Astronauten zur Station
+     * Launch Astronaut (FIXED VERSION)
+     * Benutzt assigned_rocket_id statt assigned_module_id
      */
     public function launchAstronaut(int $userId, int $rocketId, int $astroId): array {
         try {
             $this->db->beginTransaction();
 
-            // 1. Astronaut prüfen
             $stmt = $this->db->prepare("SELECT * FROM astronauts WHERE id = :aid AND user_id = :uid");
             $stmt->execute([':aid' => $astroId, ':uid' => $userId]);
             $astro = $stmt->fetch();
             if (!$astro || $astro['status'] !== 'ready') throw new Exception("Astronaut nicht bereit.");
 
-            // 2. Station prüfen (Gibt es Platz?)
-            // Wir zählen einfach Slots vs Belegung
             $stmt = $this->db->prepare("SELECT SUM(smt.crew_capacity) FROM user_modules um JOIN station_module_types smt ON um.module_type_id = smt.id WHERE um.user_id = :uid AND um.status = 'assembled'");
             $stmt->execute([':uid' => $userId]);
             $capacity = (int)$stmt->fetchColumn();
@@ -104,27 +101,22 @@ class MissionControl {
 
             if ($currentCrew >= $capacity) throw new Exception("Kein Platz auf der Station! Kapazität: $capacity");
 
-            // 3. Rakete prüfen (Muss 'idle' sein)
-            // Normalerweise bräuchte man eine "Crew Capsule", aber wir nehmen jede Rakete.
             $stmt = $this->db->prepare("SELECT * FROM user_fleet WHERE id = :rid AND user_id = :uid FOR UPDATE");
             $stmt->execute([':rid' => $rocketId, ':uid' => $userId]);
             $rocket = $stmt->fetch();
             if (!$rocket || $rocket['status'] !== 'idle') throw new Exception("Rakete nicht bereit.");
 
-            // 4. START
             $this->db->prepare("UPDATE user_fleet SET status = 'in_mission', current_mission_id = NULL WHERE id = :rid")->execute([':rid' => $rocketId]);
             $this->db->prepare("UPDATE astronauts SET status = 'in_orbit' WHERE id = :aid")->execute([':aid' => $astroId]);
 
-            // 5. Event erstellen (Typ: CREW_LAUNCH)
-            // Dauer: 2 Stunden Flug zur Station
             $duration = 7200; 
             $stmt = $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) 
                                       VALUES (:uid, 'CREW_LAUNCH', :aid, NOW(), NOW() + INTERVAL :dur SECOND, 0)");
             $stmt->execute([':uid' => $userId, ':aid' => $astroId, ':dur' => $duration]);
             
-            // Hack: Wir merken uns die Rakete in der Event Queue? Nein, geht nicht gut.
-            // Besser: Wir nutzen ein Hilfsfeld beim Astronauten, ähnlich wie beim Modul.
-            $this->db->prepare("UPDATE astronauts SET assigned_module_id = :rid WHERE id = :aid")->execute([':rid' => $rocketId, ':aid' => $astroId]);
+            // WICHTIG: Hier war der Fehler! Wir nutzen jetzt die neue Spalte assigned_rocket_id
+            // und setzen assigned_module_id explizit auf NULL.
+            $this->db->prepare("UPDATE astronauts SET assigned_rocket_id = :rid, assigned_module_id = NULL WHERE id = :aid")->execute([':rid' => $rocketId, ':aid' => $astroId]);
 
             $this->db->commit();
             return ['success' => true, 'message' => "{$astro['name']} ist auf dem Weg zur Station!"];
