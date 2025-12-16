@@ -18,21 +18,20 @@ class PoliticsManager {
     }
 
     /**
-     * Startet eine Budget-Verhandlung (Dauert Zeit, Ergebnis kommt per Event)
+     * Startet eine Verhandlung mit einem spezifischen Ziel (Topic)
      */
-    public function startNegotiation(int $userId, int $countryId, int $specialistId): array {
+    public function startNegotiation(int $userId, int $countryId, int $specialistId, string $topic): array {
         try {
             $this->db->beginTransaction();
 
-            // 1. Spezialist prüfen
-            // Wir selektieren FOR UPDATE, um Race-Conditions zu vermeiden
+            // 1. Spezialist prüfen (Race-Condition Schutz mit FOR UPDATE)
             $stmt = $this->db->prepare("SELECT * FROM specialists WHERE id = :sid AND user_id = :uid FOR UPDATE");
             $stmt->execute([':sid' => $specialistId, ':uid' => $userId]);
             $spec = $stmt->fetch();
 
             if (!$spec) throw new Exception("Mitarbeiter nicht gefunden.");
             
-            // NEU: Prüfung, ob er beschäftigt ist
+            // Prüfung, ob er beschäftigt ist
             if (!empty($spec['busy_until']) && new DateTime($spec['busy_until']) > new DateTime()) {
                 throw new Exception("{$spec['name']} ist noch bis " . date('H:i', strtotime($spec['busy_until'])) . " beschäftigt!");
             }
@@ -42,20 +41,40 @@ class PoliticsManager {
             $stmt->execute([':cid' => $countryId]);
             $country = $stmt->fetch();
 
-            // 3. Dauer berechnen
-            $duration = max(600, 3600 - ($spec['skill_value'] * 60)); 
-            
-            // 4. Event erstellen
-            $stmt = $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) 
-                                      VALUES (:uid, 'BUDGET_NEGOTIATION', :cid, NOW(), NOW() + INTERVAL :dur SECOND, 0)");
-            $stmt->execute([':uid' => $userId, ':cid' => $countryId, ':dur' => $duration]);
+            // 3. Dauer berechnen (Basis 1 Stunde, reduziert durch Skill)
+            // Lobbying geht schneller (30 min), Geld verhandeln dauert länger.
+            $baseDuration = 3600;
+            if ($topic === 'LOBBYING') $baseDuration = 1800;
 
-            // 5. NEU: Mitarbeiter als beschäftigt markieren
+            $duration = max(300, $baseDuration - ($spec['skill_value'] * 60)); 
+            
+            // 4. Event erstellen (Wir speichern das TOPIC im Event-Type!)
+            // Wir nutzen Varianten wie 'NEGOTIATION_MONEY', 'NEGOTIATION_SCIENCE', etc.
+            $eventType = 'NEGOTIATION_' . strtoupper($topic);
+
+            $stmt = $this->db->prepare("INSERT INTO event_queue (user_id, event_type, reference_id, start_time, end_time, is_processed) 
+                                      VALUES (:uid, :etype, :cid, NOW(), NOW() + INTERVAL :dur SECOND, 0)");
+            $stmt->execute([
+                ':uid' => $userId, 
+                ':etype' => $eventType, 
+                ':cid' => $countryId, 
+                ':dur' => $duration
+            ]);
+
+            // 5. Mitarbeiter blockieren
             $stmt = $this->db->prepare("UPDATE specialists SET busy_until = NOW() + INTERVAL :dur SECOND WHERE id = :sid");
             $stmt->execute([':dur' => $duration, ':sid' => $specialistId]);
 
             $this->db->commit();
-            return ['success' => true, 'message' => "{$spec['name']} ist auf dem Weg nach {$country['name']}. Dauer: " . gmdate("H:i", $duration)];
+            
+            $actionText = match($topic) {
+                'MONEY' => 'Budgetverhandlungen',
+                'SCIENCE' => 'Wissensaustausch',
+                'LOBBYING' => 'Diplomatischen Bankett',
+                default => 'Gesprächen'
+            };
+
+            return ['success' => true, 'message' => "{$spec['name']} reist nach {$country['name']} zum $actionText. Dauer: " . gmdate("H:i", $duration)];
 
         } catch (Exception $e) {
             if ($this->db->inTransaction()) $this->db->rollBack();

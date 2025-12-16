@@ -8,7 +8,7 @@ require_once 'BuildingManager.php';
 require_once 'Marketplace.php'; 
 require_once 'ResearchManager.php';
 require_once 'HRManager.php'; 
-require_once 'PoliticsManager.php'; // NEU
+require_once 'PoliticsManager.php'; 
 
 $userId = 1; 
 
@@ -18,7 +18,7 @@ $buildingManager = new BuildingManager();
 $marketplace = new Marketplace(); 
 $researchManager = new ResearchManager();
 $hrManager = new HRManager(); 
-$politicsManager = new PoliticsManager(); // NEU
+$politicsManager = new PoliticsManager(); 
 
 // 1. Engine
 $neuigkeiten = $engine->processQueue($userId);
@@ -28,7 +28,7 @@ $activeEvents = $engine->getActiveEvents($userId);
 $pendingMoney = 0;
 foreach ($activeEvents as $ev) {
     if ($ev['event_type'] === 'MISSION_RETURN') $pendingMoney += ($ev['reward_money'] ?? 0); 
-    if ($ev['event_type'] === 'BUDGET_NEGOTIATION') $pendingMoney += 5000000; // Geschätzter Wert
+    if ($ev['event_type'] === 'NEGOTIATION_MONEY') $pendingMoney += 3000000; 
 }
 
 // 3. POST Handling
@@ -45,8 +45,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $result = $researchManager->research($userId, (int)$_POST['tech_id']);
     } elseif ($_POST['action'] === 'hire_spec') {
         $result = $hrManager->hireSpecialist($userId, (int)$_POST['spec_id']);
-    } elseif ($_POST['action'] === 'negotiate') { // NEU
-        $result = $politicsManager->startNegotiation($userId, (int)$_POST['country_id'], (int)$_POST['specialist_id']);
+    } elseif ($_POST['action'] === 'negotiate') { 
+        $result = $politicsManager->startNegotiation($userId, (int)$_POST['country_id'], (int)$_POST['specialist_id'], $_POST['topic']);
     }
 
     $_SESSION[($result['success'] ? 'flash_success' : 'flash_error')] = $result['message'];
@@ -62,7 +62,7 @@ $rocketModels = $marketplace->getRocketTypes();
 $techTree = $researchManager->getTechTree($userId);
 $myEmployees = $hrManager->getMyEmployees($userId);
 $applicants = $hrManager->getApplicants(); 
-$countries = $politicsManager->getCountries($userId); // NEU
+$countries = $politicsManager->getCountries($userId); 
 
 // Flash Messages
 $errorMsg = null; $successMsg = null;
@@ -116,12 +116,11 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         .role-scientist { background: #8e44ad; color: white; }
         .role-engineer { background: #e67e22; color: white; }
         
-        /* Flaggen-Placeholder (CSS Only) */
         .flag-icon { width: 24px; height: 16px; display: inline-block; margin-right: 8px; vertical-align: middle; border: 1px solid #555; }
         .flag-de { background: linear-gradient(to bottom, #000 33%, #D00 33%, #D00 66%, #FFCE00 66%); }
         .flag-fr { background: linear-gradient(to right, #0055A4 33%, #FFF 33%, #FFF 66%, #EF4135 66%); }
         .flag-it { background: linear-gradient(to right, #009246 33%, #FFF 33%, #FFF 66%, #CE2B37 66%); }
-        .flag-us { background: #3C3B6E; } /* Simplifiziert */
+        .flag-us { background: #3C3B6E; } 
     </style>
 </head>
 <body>
@@ -167,7 +166,7 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                                 <?php 
                                     if ($event['event_type'] === 'MISSION_RETURN') echo "✈️ Mission: " . htmlspecialchars($event['rocket_name'] ?? 'Unbekannt');
                                     elseif ($event['event_type'] === 'BUILDING_UPGRADE') echo "🏗️ Ausbau: " . htmlspecialchars($event['building_name'] ?? 'Unbekannt');
-                                    elseif ($event['event_type'] === 'BUDGET_NEGOTIATION') echo "💼 Verhandlung: " . htmlspecialchars($event['country_name'] ?? 'Unbekannt');
+                                    elseif (strpos($event['event_type'], 'NEGOTIATION') !== false) echo "💼 Verhandlung (" . htmlspecialchars($event['country_name'] ?? '?') . ")";
                                 ?>
                             </div>
                             <div class="timer-time">Berechne...</div>
@@ -178,109 +177,10 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
         <?php endif; ?>
 
         <div class="grid">
-            <!-- LINKE SPALTE -->
+            <!-- LINKE SPALTE: MANAGEMENT -->
             <div>
-                <!-- POLITIK & FINANZIERUNG (NEU) -->
-                <div class="card" style="border-top: 4px solid #2980b9;">
-                    <h2 style="color: #3498db; border-color: #2980b9;">🌍 Politik & Finanzierung</h2>
-                    <p style="font-size: 0.9em; color:#aaa;">Verhandle Budgets mit Mitgliedsstaaten. Dein Erfolg hängt vom Mitarbeiter-Skill ab.</p>
-                    <ul class="list-style-none">
-                        <?php foreach ($countries as $country): 
-                            // Flagge Klasse ermitteln
-                            $flagClass = 'flag-' . $country['flag_code'];
-                            
-                            // Checken, ob wir überhaupt freie Mitarbeiter haben
-                            $availableStaff = 0;
-                            foreach ($myEmployees as $emp) {
-                                if (empty($emp['busy_until']) || strtotime($emp['busy_until']) < time()) {
-                                    $availableStaff++;
-                                }
-                            }
-                        ?>
-                            <li class="list-item" style="border-color: #3498db; display:flex; justify-content:space-between; align-items:center;">
-                                <div>
-                                    <span class="flag-icon <?= $flagClass ?>"></span>
-                                    <strong><?= htmlspecialchars($country['name']) ?></strong>
-                                    <br><small>Ruf: <?= $country['reputation'] ?>/100</small>
-                                </div>
-                                <div style="text-align:right;">
-                                    <?php if ($availableStaff > 0): ?>
-                                    <form method="POST" style="display:inline-block;">
-                                        <input type="hidden" name="action" value="negotiate">
-                                        <input type="hidden" name="country_id" value="<?= $country['id'] ?>">
-                                        
-                                        <select name="specialist_id" style="width: auto; padding: 2px;">
-                                            <?php foreach ($myEmployees as $emp): 
-                                                // NEU: Nur anzeigen wenn nicht beschäftigt
-                                                if (!empty($emp['busy_until']) && strtotime($emp['busy_until']) > time()) continue;
-                                            ?>
-                                                <option value="<?= $emp['id'] ?>"><?= htmlspecialchars($emp['name']) ?> (Skill: <?= $emp['skill_value'] ?>)</option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                        <button class="btn btn-neg">Verhandeln</button>
-                                    </form>
-                                    <?php elseif (count($myEmployees) > 0): ?>
-                                        <small style="color:#e94560;">Alle Mitarbeiter beschäftigt</small>
-                                    <?php else: ?>
-                                        <small style="color:#e94560;">Mitarbeiter benötigt</small>
-                                    <?php endif; ?>
-                                </div>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-
-                <!-- PERSONAL -->
-                <div class="card">
-                    <h2>👨‍🚀 HR & Personal</h2>
-                    <h3>Dein Team</h3>
-                    <ul class="list-style-none">
-                        <?php foreach ($myEmployees as $emp): 
-                            $isBusy = !empty($emp['busy_until']) && strtotime($emp['busy_until']) > time();
-                        ?>
-                            <li class="list-item" style="display:flex; justify-content:space-between; align-items:center;">
-                                <div>
-                                    <strong><?= htmlspecialchars($emp['name']) ?></strong>
-                                    <span class="role-badge <?= $emp['type'] == 'Scientist' ? 'role-scientist' : 'role-engineer' ?>"><?= $emp['type'] ?></span>
-                                    <br><small>Effekt: +<?= $emp['skill_value'] ?> <?= $emp['type']=='Scientist'?'SP/h':'Tempo' ?></small>
-                                </div>
-                                <div>
-                                    <?php if ($isBusy): ?>
-                                        <span style="color:#f1c40f; font-size:0.9em;">⏳ Beschäftigt bis <?= date('H:i', strtotime($emp['busy_until'])) ?></span>
-                                    <?php else: ?>
-                                        <span style="color:#4ecca3; font-size:0.9em;">● Verfügbar</span>
-                                    <?php endif; ?>
-                                </div>
-                            </li>
-                        <?php endforeach; ?>
-                        <?php if (empty($myEmployees)): ?> <p style="color:#aaa; font-style:italic">Noch keine Mitarbeiter eingestellt.</p> <?php endif; ?>
-                    </ul>
-                    <h3 style="margin-top:20px; border-top:1px solid #333; padding-top:10px;">Bewerbungen</h3>
-                    <ul class="list-style-none">
-                        <?php foreach ($applicants as $app): ?>
-                            <li class="list-item" style="border-color: #27ae60">
-                                <div style="display:flex; justify-content:space-between;">
-                                    <div>
-                                        <strong><?= htmlspecialchars($app['name']) ?></strong>
-                                        <span class="role-badge <?= $app['type'] == 'Scientist' ? 'role-scientist' : 'role-engineer' ?>"><?= $app['type'] ?></span>
-                                        <br><small>Skill: <?= $app['skill_value'] ?> | Kosten: <?= number_format($app['salary_cost']) ?> €</small>
-                                    </div>
-                                    <form method="POST">
-                                        <input type="hidden" name="action" value="hire_spec">
-                                        <input type="hidden" name="spec_id" value="<?= $app['id'] ?>">
-                                        <button class="btn btn-hire">Einstellen</button>
-                                    </form>
-                                </div>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                </div>
-            </div>
-
-            <!-- RECHTE SPALTE -->
-            <div>
-                 <!-- FORSCHUNG -->
-                 <div class="card" style="border-top: 4px solid #8e44ad;">
+                <!-- FORSCHUNG (Jetzt oben links für bessere Sichtbarkeit) -->
+                <div class="card" style="border-top: 4px solid #8e44ad;">
                     <h2 style="color: #9b59b6; border-color: #8e44ad;">🧬 Forschung</h2>
                     <ul class="list-style-none">
                         <?php foreach ($techTree as $tech): 
@@ -303,6 +203,126 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                     </ul>
                 </div>
 
+                <!-- POLITIK & FINANZIERUNG -->
+                <div class="card" style="border-top: 4px solid #2980b9;">
+                    <h2 style="color: #3498db; border-color: #2980b9;">🌍 Politik & Finanzierung</h2>
+                    <ul class="list-style-none">
+                        <?php foreach ($countries as $country): 
+                            $flagClass = 'flag-' . $country['flag_code'];
+                            $availableStaff = 0;
+                            foreach ($myEmployees as $emp) {
+                                if (empty($emp['busy_until']) || strtotime($emp['busy_until']) < time()) $availableStaff++;
+                            }
+                        ?>
+                            <li class="list-item" style="border-color: #3498db; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
+                                <div style="min-width:150px;">
+                                    <span class="flag-icon <?= $flagClass ?>"></span>
+                                    <strong><?= htmlspecialchars($country['name']) ?></strong>
+                                    <br><small>Ruf: <?= $country['reputation'] ?>/100</small>
+                                </div>
+                                <div style="flex-grow:1; text-align:right; margin-top:5px;">
+                                    <?php if ($availableStaff > 0): ?>
+                                    <form method="POST" style="display:inline-flex; gap:5px; flex-wrap:wrap; justify-content:flex-end;">
+                                        <input type="hidden" name="action" value="negotiate">
+                                        <input type="hidden" name="country_id" value="<?= $country['id'] ?>">
+                                        <select name="topic" style="width:auto; padding:5px;">
+                                            <option value="MONEY">💰 Fördergelder</option>
+                                            <option value="SCIENCE">🔬 Forschung</option>
+                                            <option value="LOBBYING">🤝 Beziehungen (Ruf)</option>
+                                        </select>
+                                        <select name="specialist_id" style="width:auto; padding:5px;">
+                                            <?php foreach ($myEmployees as $emp): 
+                                                if (!empty($emp['busy_until']) && strtotime($emp['busy_until']) > time()) continue;
+                                            ?>
+                                                <option value="<?= $emp['id'] ?>"><?= htmlspecialchars($emp['name']) ?> (<?= $emp['skill_value'] ?>)</option>
+                                            <?php endforeach; ?>
+                                        </select>
+                                        <button class="btn btn-neg">Go</button>
+                                    </form>
+                                    <?php elseif (count($myEmployees) > 0): ?>
+                                        <small style="color:#e94560;">Alle Mitarbeiter beschäftigt</small>
+                                    <?php else: ?>
+                                        <small style="color:#e94560;">Mitarbeiter benötigt</small>
+                                    <?php endif; ?>
+                                </div>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+
+                <!-- PERSONAL -->
+                <div class="card">
+                    <h2>👨‍🚀 HR & Personal</h2>
+                    <ul class="list-style-none">
+                        <?php foreach ($myEmployees as $emp): 
+                            $isBusy = !empty($emp['busy_until']) && strtotime($emp['busy_until']) > time();
+                        ?>
+                            <li class="list-item" style="display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <strong><?= htmlspecialchars($emp['name']) ?></strong>
+                                    <span class="role-badge <?= $emp['type'] == 'Scientist' ? 'role-scientist' : 'role-engineer' ?>"><?= $emp['type'] ?></span>
+                                    <br><small>Effekt: +<?= $emp['skill_value'] ?> <?= $emp['type']=='Scientist'?'SP/h':'Tempo' ?></small>
+                                </div>
+                                <div>
+                                    <?php if ($isBusy): ?>
+                                        <span style="color:#f1c40f; font-size:0.9em;">⏳ Beschäftigt bis <?= date('H:i', strtotime($emp['busy_until'])) ?></span>
+                                    <?php else: ?>
+                                        <span style="color:#4ecca3; font-size:0.9em;">● Verfügbar</span>
+                                    <?php endif; ?>
+                                </div>
+                            </li>
+                        <?php endforeach; ?>
+                        
+                        <?php foreach ($applicants as $app): ?>
+                            <li class="list-item" style="border-color: #27ae60; opacity: 0.8;">
+                                <div style="display:flex; justify-content:space-between;">
+                                    <div>
+                                        <strong><?= htmlspecialchars($app['name']) ?></strong> (Bewerber)
+                                        <br><small>Skill: <?= $app['skill_value'] ?> | Kosten: <?= number_format($app['salary_cost']) ?> €</small>
+                                    </div>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="hire_spec">
+                                        <input type="hidden" name="spec_id" value="<?= $app['id'] ?>">
+                                        <button class="btn btn-hire">Einstellen</button>
+                                    </form>
+                                </div>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- RECHTE SPALTE: OPERATIONEN -->
+            <div>
+                <!-- GEBÄUDE (Wieder da!) -->
+                <div class="card">
+                    <h2>Basis Infrastruktur</h2>
+                    <ul class="list-style-none">
+                        <?php foreach ($myBuildings as $b): ?>
+                            <li class="list-item">
+                                <div style="display:flex; justify-content:space-between;">
+                                    <strong><?= htmlspecialchars($b['name']) ?></strong>
+                                    <span>Lvl <?= $b['current_level'] ?? 0 ?></span>
+                                </div>
+                                <div style="font-size:0.85em; color:#aaa; margin-bottom:5px;"><?= htmlspecialchars($b['description']) ?></div>
+                                
+                                <?php if (isset($b['status']) && $b['status'] === 'upgrading'): ?>
+                                    <div style="color:#f1c40f; font-weight:bold; margin-top:5px;">🚧 Wird ausgebaut...</div>
+                                <?php else: ?>
+                                    <form method="POST" style="margin-top:5px">
+                                        <input type="hidden" name="action" value="upgrade_building">
+                                        <input type="hidden" name="building_type_id" value="<?= $b['type_id'] ?>">
+                                        <button class="btn" style="width:100%; font-size:0.8em; background:#2c3e50;">
+                                            ⬆️ Ausbauen (<?= number_format($b['next_cost'],0,',','.') ?>€)
+                                        </button>
+                                    </form>
+                                <?php endif; ?>
+                            </li>
+                        <?php endforeach; ?>
+                    </ul>
+                </div>
+
+                <!-- FLOTTE -->
                 <div class="card">
                     <h2>Raumflotte & Missionen</h2>
                     <ul class="list-style-none">
@@ -333,27 +353,9 @@ if (isset($_SESSION['flash_error'])) { $errorMsg = $_SESSION['flash_error']; uns
                     </ul>
                 </div>
 
+                <!-- MARKT -->
                 <div class="card">
-                    <h2>Basis & Markt</h2>
-                    <ul class="list-style-none">
-                        <?php foreach ($myBuildings as $b): ?>
-                            <li class="list-item">
-                                <div style="display:flex; justify-content:space-between;">
-                                    <strong><?= htmlspecialchars($b['name']) ?></strong>
-                                    <span>Lvl <?= $b['current_level'] ?? 0 ?></span>
-                                </div>
-                                <?php if (isset($b['status']) && $b['status'] !== 'upgrading'): ?>
-                                    <form method="POST" style="margin-top:5px">
-                                        <input type="hidden" name="action" value="upgrade_building">
-                                        <input type="hidden" name="building_type_id" value="<?= $b['type_id'] ?>">
-                                        <button class="btn" style="width:100%; font-size:0.8em; background:#2c3e50;">⬆️ Ausbauen (<?= number_format($b['next_cost'],0,',','.') ?>€)</button>
-                                    </form>
-                                <?php endif; ?>
-                            </li>
-                        <?php endforeach; ?>
-                    </ul>
-                    
-                    <h3 style="color:#f39c12; margin-top:20px; border-top:1px solid #333; padding-top:10px;">🛒 Raketen kaufen</h3>
+                    <h3 style="color:#f39c12; margin-top:0;">🛒 Raketen kaufen</h3>
                     <ul class="list-style-none">
                         <?php foreach ($rocketModels as $model): ?>
                             <li class="list-item" style="border-color:#f39c12">

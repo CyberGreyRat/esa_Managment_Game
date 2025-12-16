@@ -5,23 +5,33 @@ require_once 'Database.php';
 $userId = 1; // Wir nehmen an, du bist User 1
 $db = Database::getInstance()->getConnection();
 
-// Zeitreise: Alle zukünftigen Events dieses Users auf "jetzt fertig" setzen
-// Wir datieren sie auf "jetzt minus 1 Sekunde", damit sie beim nächsten Check als vergangen gelten.
-$sql = "UPDATE event_queue 
-        SET end_time = NOW() - INTERVAL 1 SECOND 
-        WHERE user_id = :uid 
-        AND is_processed = 0 
-        AND end_time > NOW()";
-
 try {
-    $stmt = $db->prepare($sql);
+    // 1. Events in der Queue überspringen (Raketen, Bau, Verhandlungen)
+    $sqlEvents = "UPDATE event_queue 
+                  SET end_time = NOW() - INTERVAL 1 SECOND 
+                  WHERE user_id = :uid 
+                  AND is_processed = 0 
+                  AND end_time > NOW()";
+    
+    $stmt = $db->prepare($sqlEvents);
     $stmt->execute([':uid' => $userId]);
-    $count = $stmt->rowCount();
+    $countEvents = $stmt->rowCount();
 
-    if ($count > 0) {
-        $_SESSION['flash_success'] = "🚀 ZEITREISE: $count Ereignisse wurden sofort beendet!";
+    // 2. Mitarbeiter sofort freigeben (Kalender löschen)
+    // Das hat vorher gefehlt! Wir setzen den Timer auf die Vergangenheit.
+    $sqlHR = "UPDATE specialists 
+              SET busy_until = NOW() - INTERVAL 1 SECOND 
+              WHERE user_id = :uid 
+              AND busy_until > NOW()";
+              
+    $stmtHR = $db->prepare($sqlHR);
+    $stmtHR->execute([':uid' => $userId]);
+    $countHR = $stmtHR->rowCount();
+
+    if ($countEvents > 0 || $countHR > 0) {
+        $_SESSION['flash_success'] = "🚀 ZEITREISE: $countEvents Ereignisse beendet und $countHR Mitarbeiter aus Meetings geholt!";
     } else {
-        $_SESSION['flash_error'] = "Keine laufenden Ereignisse gefunden, die übersprungen werden könnten.";
+        $_SESSION['flash_error'] = "Nichts zu tun: Keine laufenden Ereignisse oder beschäftigten Mitarbeiter.";
     }
 
 } catch (Exception $e) {
