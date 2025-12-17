@@ -86,7 +86,7 @@ class GameEngine {
         $sql = "SELECT 
                     eq.*,
                     TIMESTAMPDIFF(SECOND, NOW(), eq.end_time) as seconds_remaining,
-                    uf.name as rocket_name,
+                    uf.rocket_name,
                     mt.name as mission_name,
                     mt.reward_money,
                     bt.name as building_name,
@@ -122,9 +122,61 @@ class GameEngine {
             case 'MODULE_CONSTRUCTION': return $this->completeModuleConstruction($event);
             case 'MODULE_LAUNCH': return $this->completeModuleLaunch($event);
             case 'ASTRO_TRAINING': return $this->completeAstroTraining($event);
-            case 'CREW_LAUNCH': return $this->completeCrewLaunch($event); 
+            case 'CREW_LAUNCH': return $this->completeCrewLaunch($event);
+            case 'PRODUCTION_FINISH': return $this->completeProduction($event); 
             default: return "Unbekanntes Event (Typ: {$event['event_type']}) verarbeitet.";
         }
+    }
+
+    private function completeProduction(array $event): string {
+        $lineId = $event['reference_id'];
+        $userId = $event['user_id'];
+        
+        // 1. Get Production Line Info
+        $stmt = $this->db->prepare("SELECT pl.*, p.name as product_name, p.xp_on_create FROM production_lines pl JOIN products p ON pl.product_id = p.id WHERE pl.id = :id");
+        $stmt->execute([':id' => $lineId]);
+        $line = $stmt->fetch();
+        
+        if (!$line) return "Fehler: Produktion nicht gefunden.";
+
+        // 2. Add to Inventory
+        $this->db->prepare("INSERT INTO user_inventory (user_id, product_id, amount) VALUES (:uid, :pid, 1) ON DUPLICATE KEY UPDATE amount = amount + 1")
+            ->execute([':uid' => $userId, ':pid' => $line['product_id']]);
+
+        // 3. Free Specialist & Give XP
+        $this->db->prepare("UPDATE specialists SET assignment_id = NULL, xp = xp + :xp WHERE id = :sid")
+            ->execute([':sid' => $line['specialist_id'], ':xp' => $line['xp_on_create']]);
+        
+        // 4. Mark Limit as Completed
+        $this->db->prepare("UPDATE production_lines SET is_completed = 1 WHERE id = :id")->execute([':id' => $lineId]);
+
+        $msg = "🏭 Fertigung abgeschlossen: 1x {$line['product_name']} produziert! (XP +{$line['xp_on_create']})";
+
+        // 5. AUTO-DELIVER TO CONTRACT (Feature Request)
+        // Check if we have an active contract for this product
+        require_once 'classes/ContractManager.php';
+        $cm = new ContractManager();
+        $activeContracts = $cm->getActiveContracts($userId);
+        
+        foreach ($activeContracts as $c) {
+            if ($c['product_id'] == $line['product_id']) {
+                // Check if we have enough to fulfill THIS contract now
+                // We re-check inventory because we just added 1
+                $stmtInv = $this->db->prepare("SELECT amount FROM user_inventory WHERE user_id = :uid AND product_id = :pid");
+                $stmtInv->execute([':uid' => $userId, ':pid' => $c['product_id']]);
+                $nowAmount = $stmtInv->fetchColumn() ?: 0;
+                
+                if ($nowAmount >= $c['amount_needed']) {
+                    // Fulfill it!
+                    $res = $cm->deliverContract($c['id'], $userId);
+                    if ($res['success']) {
+                        $msg .= "<br>✅ " . $res['message'] . " (Automatisch geliefert)";
+                    }
+                }
+            }
+        }
+
+        return $msg;
     }
 
     private function completeCrewLaunch(array $event): string {

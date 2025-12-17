@@ -9,10 +9,8 @@ class AstronautManager {
     }
 
     public function getAstronauts(int $userId): array {
-        $stmt = $this->db->prepare("SELECT a.*, um.id as module_id, smt.name as module_name 
+        $stmt = $this->db->prepare("SELECT a.*
                                     FROM astronauts a 
-                                    LEFT JOIN user_modules um ON a.assigned_module_id = um.id
-                                    LEFT JOIN station_module_types smt ON um.module_type_id = smt.id
                                     WHERE a.user_id = :uid");
         $stmt->execute([':uid' => $userId]);
         return $stmt->fetchAll();

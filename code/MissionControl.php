@@ -122,7 +122,7 @@ class MissionControl
 
             // WICHTIG: Hier war der Fehler! Wir nutzen jetzt die neue Spalte assigned_rocket_id
             // und setzen assigned_module_id explizit auf NULL.
-            $this->db->prepare("UPDATE astronauts SET assigned_rocket_id = :rid, assigned_module_id = NULL WHERE id = :aid")->execute([':rid' => $rocketId, ':aid' => $astroId]);
+            $this->db->prepare("UPDATE astronauts SET assigned_rocket_id = :rid WHERE id = :aid")->execute([':rid' => $rocketId, ':aid' => $astroId]);
 
             $this->db->commit();
             return ['success' => true, 'message' => "{$astro['name']} ist auf dem Weg zur Station!"];

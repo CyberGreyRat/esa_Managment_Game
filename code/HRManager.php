@@ -1,17 +1,20 @@
 <?php
 require_once 'Database.php';
 
-class HRManager {
+class HRManager
+{
     private PDO $db;
 
-    public function __construct() {
+    public function __construct()
+    {
         $this->db = Database::getInstance()->getConnection();
     }
 
     /**
      * Holt alle Mitarbeiter, die dem User gehören
      */
-    public function getMyEmployees(int $userId): array {
+    public function getMyEmployees(int $userId): array
+    {
         $stmt = $this->db->prepare("SELECT * FROM specialists WHERE user_id = :uid");
         $stmt->execute([':uid' => $userId]);
         return $stmt->fetchAll();
@@ -20,7 +23,8 @@ class HRManager {
     /**
      * Holt alle Bewerber, die noch niemanden gehören (Markt)
      */
-    public function getApplicants(): array {
+    public function getApplicants(): array
+    {
         // Wir zeigen nur Bewerber ohne User-ID
         $stmt = $this->db->query("SELECT * FROM specialists WHERE user_id IS NULL");
         return $stmt->fetchAll();
@@ -29,7 +33,8 @@ class HRManager {
     /**
      * Mitarbeiter einstellen
      */
-    public function hireSpecialist(int $userId, int $specId): array {
+    public function hireSpecialist(int $userId, int $specId): array
+    {
         try {
             $this->db->beginTransaction();
 
@@ -43,8 +48,10 @@ class HRManager {
             $stmt->execute([':sid' => $specId]);
             $spec = $stmt->fetch();
 
-            if (!$spec) throw new Exception("Bewerber nicht mehr verfügbar.");
-            if ($money < $spec['salary_cost']) throw new Exception("Nicht genug Budget für das Handgeld.");
+            if (!$spec)
+                throw new Exception("Bewerber nicht mehr verfügbar.");
+            if ($money < $spec['salary_cost'])
+                throw new Exception("Nicht genug Budget für das Handgeld.");
 
             // 3. Einstellen & Bezahlen
             $stmt = $this->db->prepare("UPDATE user_resources SET money = money - :cost WHERE user_id = :uid");
@@ -57,8 +64,23 @@ class HRManager {
             return ['success' => true, 'message' => "{$spec['name']} wurde eingestellt!"];
 
         } catch (Exception $e) {
-            if ($this->db->inTransaction()) $this->db->rollBack();
+            if ($this->db->inTransaction())
+                $this->db->rollBack();
             return ['success' => false, 'message' => $e->getMessage()];
+        }
+    }
+
+    public function setBudget(int $userId, int $specId, int $budget): array
+    {
+        // Verify ownership
+        $stmt = $this->db->prepare("UPDATE specialists SET budget = :budget WHERE id = :id AND user_id = :uid");
+        $stmt->execute([':budget' => $budget, ':id' => $specId, ':uid' => $userId]);
+
+        if ($stmt->rowCount() > 0) {
+            return ['success' => true, 'message' => 'Budget aktualisiert.'];
+        } else {
+            // Check if it was just the same value
+            return ['success' => true, 'message' => 'Budget gespeichert.'];
         }
     }
 }

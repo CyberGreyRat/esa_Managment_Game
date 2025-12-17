@@ -1,20 +1,20 @@
 <?php
 require_once 'View.php';
-require_once 'MissionControl.php';
-require_once 'Marketplace.php';
+require_once __DIR__ . '/../MissionControl.php';
+require_once __DIR__ . '/../Marketplace.php';
 
 class FleetView extends View {
     
     // Logik: Was passiert, wenn man hier einen Knopf drückt?
     public function handleAction(): ?array {
         if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-            $missionControl = new MissionControl();
             $marketplace = new Marketplace();
 
-            if ($_POST['action'] === 'start_mission') {
-                return $missionControl->startMission($this->userId, (int)$_POST['rocket_id'], (int)$_POST['mission_id']);
-            } elseif ($_POST['action'] === 'buy_rocket') {
-                return $marketplace->buyRocket($this->userId, (int)$_POST['rocket_type_id']);
+            // Nur noch Kauf-Aktionen hier, Starts gehen über den MissionPlanner
+            if (isset($_POST['action'])) {
+                if ($_POST['action'] === 'buy_rocket') {
+                    return $marketplace->buyRocket($this->userId, (int)$_POST['rocket_type_id']);
+                }
             }
         }
         return null;
@@ -25,13 +25,12 @@ class FleetView extends View {
         $myFleet = $this->player->getFleet();
         $marketplace = new Marketplace();
         $rocketModels = $marketplace->getRocketTypes();
-        $missionControl = new MissionControl();
-        $availableMissions = $missionControl->getAvailableMissions();
         ?>
         
         <h1 class="page-title">Flotten-Kommando</h1>
+        
         <div class="grid-2">
-            <!-- Eigene Flotte -->
+            <!-- Aktive Flotte -->
             <div class="card">
                 <div class="card-header">Hangar Bestand</div>
                 <div class="card-body">
@@ -49,17 +48,8 @@ class FleetView extends View {
                             </td>
                             <td style="text-align: right;">
                                 <?php if ($ship['status'] == 'idle'): ?>
-                                    <form method="POST" style="display:inline;">
-                                        <input type="hidden" name="action" value="start_mission">
-                                        <input type="hidden" name="rocket_id" value="<?= $ship['id'] ?>">
-                                        <select name="mission_id" style="padding: 5px; background: #333; color: white; border: none; border-radius: 4px;">
-                                            <option value="">Kommerzielle Mission...</option>
-                                            <?php foreach ($availableMissions as $m): ?>
-                                                <option value="<?= $m['id'] ?>"><?= $m['name'] ?> (+<?= number_format($m['reward_money']/1000000,1) ?>M)</option>
-                                            <?php endforeach; ?>
-                                        </select>
-                                        <button class="btn btn-sm">Start</button>
-                                    </form>
+                                    <!-- Link zum neuen Mission Planner -->
+                                    <a href="?page=planner&rocket_id=<?= $ship['id'] ?>" class="btn btn-sm btn-action">Mission Planen</a>
                                 <?php else: ?>
                                     <small class="text-muted">Unterwegs</small>
                                 <?php endif; ?>
@@ -70,7 +60,7 @@ class FleetView extends View {
                 </div>
             </div>
 
-            <!-- Markt -->
+            <!-- Beschaffung -->
             <div class="card">
                 <div class="card-header">Beschaffung (Markt)</div>
                 <div class="card-body">

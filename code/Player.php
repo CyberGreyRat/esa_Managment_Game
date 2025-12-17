@@ -41,7 +41,7 @@ class Player {
      * Später könnten wir hier ein Array aus "Rocket"-Objekten zurückgeben.
      */
     public function getFleet(): array {
-        $sql = "SELECT uf.id, uf.name as rocket_name, uf.status, rt.name as type_name, rt.cargo_capacity_leo 
+        $sql = "SELECT uf.id, uf.rocket_name, uf.status, rt.name as type_name, rt.cargo_capacity_leo 
                 FROM user_fleet uf
                 JOIN rocket_types rt ON uf.rocket_type_id = rt.id
                 WHERE uf.user_id = :id";
